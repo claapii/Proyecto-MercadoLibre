@@ -1,0 +1,10 @@
+1;zapatillas nike;9;50000
+2;zapatillas adidas;8;48000
+3;polera blanca;15;12000
+4;polera negra;12;13000
+5;jeans slim;6;30000
+6;notebook lenovo;3;600000
+7;mouse logitech;20;15000
+8;teclado mecanico;5;45000
+9;monitor samsung;4;120000
+10;audifonos sony;7;35000
