@@ -16,20 +16,21 @@ public class Servidor {
         cargarProductos();
 
         try (ServerSocket serverSocket = new ServerSocket(5000)) {
-            System.out.println("Servidor corriendo...");
+            System.out.println("Servidor MercadoLibre corriendo en puerto 5000...");
 
             while (true) {
                 Socket cliente = serverSocket.accept();
+
                 ManejadorCliente manejador = new ManejadorCliente(cliente, this);
                 new Thread(manejador).start();
             }
 
         } catch (IOException e) {
-            e.printStackTrace();
+            System.out.println("Error en el servidor MercadoLibre: " + e.getMessage());
         }
     }
-    
-    //Métodos para las dos funciones principales del sistema
+
+    // Función principal 1: buscar productos
     public List<Producto> buscar(String nombre) {
         List<Producto> resultado = new ArrayList<>();
 
@@ -44,50 +45,106 @@ public class Servidor {
         return resultado;
     }
 
-    public String comprar(int id) {
+    // Función principal 2: comprar producto usando WebPay
+    public String comprar(int id, int saldoCliente) {
         synchronized (productos) {
             for (Producto p : productos) {
+
                 if (p.id == id) {
-                    if (p.stock > 0) {
+
+                    // Primero se verifica si hay stock
+                    if (p.stock <= 0) {
+                        return "Compra rechazada: producto sin stock.";
+                    }
+
+                    // Luego se consulta al servidor WebPay
+                    RespuestaPago respuestaPago = procesarPagoWebPay(p.precio, saldoCliente);
+
+                    // Si WebPay no responde, no se realiza la compra
+                    if (respuestaPago == null) {
+                        return "Compra cancelada: no se pudo conectar con WebPay.";
+                    }
+
+                    // Si WebPay aprueba el pago, se descuenta el stock
+                    if (respuestaPago.aprobado) {
                         p.stock--;
                         guardarProductos();
-                        return "Compra Exitosa!";
+
+                        return "Compra exitosa. " 
+                                + respuestaPago.mensaje 
+                                + " Saldo restante: $" 
+                                + respuestaPago.saldoRestante;
                     } else {
-                        return "Sin Stock!";
+                        return "Compra rechazada. " + respuestaPago.mensaje;
                     }
                 }
             }
         }
-        return "No encontrado.";
-    }
-    
-    //Métodos para el manejo de la base de datos (txt)
-    private void cargarProductos() {
-        try (BufferedReader br = new BufferedReader(new FileReader("productos.txt"))) {
-            String linea;
-            while ((linea = br.readLine()) != null) {
-                String[] partes = linea.split(";");
 
-                productos.add(new Producto(
-                    Integer.parseInt(partes[0]),
-                    partes[1],
-                    Integer.parseInt(partes[2]),
-                    Integer.parseInt(partes[3])
-                ));
-            }
-        } catch (IOException e) {
-            System.out.println("Error cargando productos");
+        return "Producto no encontrado.";
+    }
+
+    // Comunicación entre Servidor MercadoLibre y Servidor WebPay
+    private RespuestaPago procesarPagoWebPay(int monto, int saldoCliente) {
+        try (
+            Socket socket = new Socket("localhost", 6000);
+            ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+            ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
+        ) {
+
+            PeticionPago peticionPago = new PeticionPago(monto, saldoCliente);
+
+            out.writeObject(peticionPago);
+            out.flush();
+
+            RespuestaPago respuestaPago = (RespuestaPago) in.readObject();
+
+            return respuestaPago;
+
+        } catch (Exception e) {
+            System.out.println("Error conectando con WebPay: " + e.getMessage());
+            return null;
         }
     }
 
+    // Cargar productos desde archivo txt
+    private void cargarProductos() {
+        try (BufferedReader br = new BufferedReader(new FileReader("productos.txt"))) {
+            String linea;
+
+            while ((linea = br.readLine()) != null) {
+                String[] partes = linea.split(";");
+
+                if (partes.length == 4) {
+                    productos.add(new Producto(
+                            Integer.parseInt(partes[0]),
+                            partes[1],
+                            Integer.parseInt(partes[2]),
+                            Integer.parseInt(partes[3])
+                    ));
+                }
+            }
+
+            System.out.println("Productos cargados correctamente.");
+
+        } catch (IOException e) {
+            System.out.println("Error cargando productos.txt: " + e.getMessage());
+        } catch (NumberFormatException e) {
+            System.out.println("Error en el formato numérico de productos.txt: " + e.getMessage());
+        }
+    }
+
+    // Guardar productos actualizados en archivo txt
     private void guardarProductos() {
         try (BufferedWriter bw = new BufferedWriter(new FileWriter("productos.txt"))) {
+
             for (Producto p : productos) {
                 bw.write(p.id + ";" + p.nombre + ";" + p.stock + ";" + p.precio);
                 bw.newLine();
             }
+
         } catch (IOException e) {
-            System.out.println("Error guardando productos");
+            System.out.println("Error guardando productos.txt: " + e.getMessage());
         }
     }
 }

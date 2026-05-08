@@ -30,8 +30,12 @@ public class Cliente {
 
             } else if (op == 2) {
                 req.tipo = "COMPRAR";
+
                 System.out.print("ID: ");
                 req.dato = sc.nextLine();
+
+                System.out.print("Saldo disponible: ");
+                req.saldoCliente = sc.nextInt();
             }
 
             // enviar petición

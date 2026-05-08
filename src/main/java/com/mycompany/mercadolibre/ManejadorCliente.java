@@ -26,9 +26,15 @@ public class ManejadorCliente implements Runnable {
             if (req.tipo.equalsIgnoreCase("BUSCAR")) {
                 res.productos = servidor.buscar(req.dato);
 
-            } else if (req.tipo.equalsIgnoreCase("COMPRAR")) {
-                int id = Integer.parseInt(req.dato);
-                res.mensaje = servidor.comprar(id);
+            } else if ("COMPRAR".equalsIgnoreCase(req.tipo)) {
+
+                try {
+                    int id = Integer.parseInt(req.dato);
+                    res.mensaje = servidor.comprar(id, req.saldoCliente);
+
+                } catch (NumberFormatException e) {
+                    res.mensaje = "ID inválido.";
+                }
             }
 
             out.writeObject(res);
