@@ -14,45 +14,74 @@ public class Cliente {
             ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
             Scanner sc = new Scanner(System.in);
         ) {
-
-            System.out.println("1. Buscar");
-            System.out.println("2. Comprar");
-
-            int op = sc.nextInt();
+            // 1. Pedimos el saldo una única vez al iniciar sesión
+            System.out.print("Bienvenido a MercadoLibre. Ingrese su saldo inicial: $");
+            int miSaldo = sc.nextInt();
             sc.nextLine();
 
-            Peticion req = new Peticion();
+            // 2. Bucle principal para no desconectarse
+            while (true) {
+                System.out.println("\n--- MENÚ MERCADOLIBRE ---");
+                System.out.println("Saldo actual: $" + miSaldo);
+                System.out.println("1. Buscar productos");
+                System.out.println("2. Comprar producto");
+                System.out.println("3. Salir");
+                System.out.print("Elija una opción: ");
 
-            if (op == 1) {
-                req.tipo = "BUSCAR";
-                System.out.print("Nombre: ");
-                req.dato = sc.nextLine();
+                int op = sc.nextInt();
+                sc.nextLine();
 
-            } else if (op == 2) {
-                req.tipo = "COMPRAR";
+                Peticion req = new Peticion();
 
-                System.out.print("ID: ");
-                req.dato = sc.nextLine();
+                if (op == 1) {
+                    req.tipo = "BUSCAR";
+                    System.out.print("Nombre del producto a buscar: ");
+                    req.dato = sc.nextLine();
 
-                System.out.print("Saldo disponible: ");
-                req.saldoCliente = sc.nextInt();
-            }
+                } else if (op == 2) {
+                    req.tipo = "COMPRAR";
+                    System.out.print("ID del producto a comprar: ");
+                    req.dato = sc.nextLine();
+                    req.saldoCliente = miSaldo; // Enviamos el saldo de la sesión
 
-            // enviar petición
-            out.writeObject(req);
-
-            // recibir respuesta
-            Respuesta res = (Respuesta) in.readObject();
-
-            // mostrar resultado
-            if (req.tipo.equals("BUSCAR")) {
-                for (Producto p : res.productos) {
-                    System.out.println(p.id + " - " + p.nombre +
-                            " | Stock: " + p.stock +
-                            " | Precio: " + p.precio);
+                } else if (op == 3) {
+                    req.tipo = "SALIR";
+                    out.writeObject(req);
+                    out.flush();
+                    System.out.println("Desconectando del servidor... ¡Hasta pronto!");
+                    break; // Rompe el bucle y cierra el socket
+                } else {
+                    System.out.println("Opción no válida.");
+                    continue;
                 }
-            } else {
-                System.out.println(res.mensaje);
+
+                // Enviar petición al servidor
+                out.writeObject(req);
+                out.flush();
+
+                // Recibir respuesta
+                Respuesta res = (Respuesta) in.readObject();
+
+                // Procesar la respuesta
+                if (req.tipo.equals("BUSCAR")) {
+                    System.out.println("\n--- Resultados de búsqueda ---");
+                    if (res.productos.isEmpty()) {
+                        System.out.println("No se encontraron productos.");
+                    } else {
+                        for (Producto p : res.productos) {
+                            System.out.println("ID: " + p.id + " | " + p.nombre +
+                                    " | Stock: " + p.stock +
+                                    " | Precio: $" + p.precio);
+                        }
+                    }
+                } else if (req.tipo.equals("COMPRAR")) {
+                    System.out.println("\n" + res.mensaje);
+                    
+                    // Si la compra fue exitosa, el servidor nos envió el nuevo saldo. Lo actualizamos localmente.
+                    if (res.nuevoSaldo != -1) {
+                        miSaldo = res.nuevoSaldo;
+                    }
+                }
             }
 
         } catch (Exception e) {

@@ -46,15 +46,16 @@ public class Servidor {
     }
 
     // Función principal 2: comprar producto usando WebPay
-    public String comprar(int id, int saldoCliente) {
+    public Respuesta comprar(int id, int saldoCliente) {
+        Respuesta res = new Respuesta();
+
         synchronized (productos) {
             for (Producto p : productos) {
-
                 if (p.id == id) {
-
                     // Primero se verifica si hay stock
                     if (p.stock <= 0) {
-                        return "Compra rechazada: producto sin stock.";
+                        res.mensaje = "Compra rechazada: producto sin stock.";
+                        return res;
                     }
 
                     // Luego se consulta al servidor WebPay
@@ -62,7 +63,8 @@ public class Servidor {
 
                     // Si WebPay no responde, no se realiza la compra
                     if (respuestaPago == null) {
-                        return "Compra cancelada: no se pudo conectar con WebPay.";
+                        res.mensaje = "Compra cancelada: no se pudo conectar con WebPay.";
+                        return res;
                     }
 
                     // Si WebPay aprueba el pago, se descuenta el stock
@@ -70,18 +72,19 @@ public class Servidor {
                         p.stock--;
                         guardarProductos();
 
-                        return "Compra exitosa. " 
-                                + respuestaPago.mensaje 
-                                + " Saldo restante: $" 
-                                + respuestaPago.saldoRestante;
+                        res.mensaje = "Compra exitosa. " + respuestaPago.mensaje;
+                        res.nuevoSaldo = respuestaPago.saldoRestante; // Adjuntamos el nuevo saldo
+                        return res;
                     } else {
-                        return "Compra rechazada. " + respuestaPago.mensaje;
+                        res.mensaje = "Compra rechazada. " + respuestaPago.mensaje;
+                        return res;
                     }
                 }
             }
         }
 
-        return "Producto no encontrado.";
+        res.mensaje = "Producto no encontrado.";
+        return res;
     }
 
     // Comunicación entre Servidor MercadoLibre y Servidor WebPay
