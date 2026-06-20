@@ -20,8 +20,16 @@ public class Servidor {
     // Pool fijo de hilos para controlar clientes simultáneos
     private static final int MAX_CLIENTES = 10;
 
-    public static void main(String[] args) {
+    // Comunicador reutilizable para enviar mensajes a otros nodos
+    private ComunicadorNodos comunicador = new ComunicadorNodos();
 
+    // ID del coordinador actual (arranca siendo el nodo 3, como en Membresia)
+    private volatile int idCoordinadorActual;
+
+    // Algoritmo de elección de coordinador
+    private AlgoritmoBully bully;
+
+    public static void main(String[] args) {
         if (args.length < 2) {
             System.out.println("Uso: java Servidor <idNodo> <puertoClientes>");
             System.out.println("Ejemplo Nodo 1: java Servidor 1 5001");
@@ -41,6 +49,8 @@ public class Servidor {
         this.puertoClientes = puertoClientes;
         this.puertoNodos = calcularPuertoNodos(idNodo);
         this.relojLamport = new RelojLamport();
+        this.idCoordinadorActual = Membresia.obtenerCoordinadorInicial().getIdNodo();
+        this.bully = new AlgoritmoBully(this);
     }
 
     private int calcularPuertoNodos(int idNodo) {
@@ -50,9 +60,24 @@ public class Servidor {
     private void iniciar() {
         cargarProductos();
 
-        // Inicia receptor interno para mensajes entre nodos.
-        ReceptorMensajesNodo receptorNodos = new ReceptorMensajesNodo(idNodo, puertoNodos);
+        // 1. Detector de fallos (necesita referencia al Servidor para el callback)
+        DetectorFallos detector = new DetectorFallos(idNodo, this);
+
+        // 2. Receptor de mensajes entre nodos (comparte relojLamport, detector y bully)
+        ReceptorMensajesNodo receptorNodos = new ReceptorMensajesNodo(
+            idNodo, puertoNodos, relojLamport, detector, this
+        );
         receptorNodos.start();
+
+        // 3. Emisor de heartbeats periódicos hacia los otros nodos
+        EmisorHeartbeat emisorHB = new EmisorHeartbeat(idNodo, puertoNodos, relojLamport);
+        emisorHB.start();
+
+        // 4. Detector empieza a vigilar los timeouts
+        detector.start();
+
+        // 5. Si no soy el coordinador inicial, pido el estado actual al arrancar
+        solicitarTransferenciaEstado();
 
         ExecutorService poolClientes = Executors.newFixedThreadPool(MAX_CLIENTES);
 
@@ -63,11 +88,10 @@ public class Servidor {
             System.out.println("Puerto clientes: " + puertoClientes);
             System.out.println("Puerto mensajes entre nodos: " + puertoNodos);
             System.out.println("Pool de clientes activo. Máximo simultáneos: " + MAX_CLIENTES);
-            System.out.println("Coordinador inicial: Nodo " 
-                    + Membresia.obtenerCoordinadorInicial().getIdNodo());
+            System.out.println("Coordinador actual: Nodo " + idCoordinadorActual);
             System.out.println("========================================");
 
-            registrarEvento("Nodo iniciado. Puerto clientes: " 
+            registrarEvento("Nodo iniciado. Puerto clientes: "
                     + puertoClientes + ", puerto nodos: " + puertoNodos);
 
             while (true) {
@@ -93,13 +117,49 @@ public class Servidor {
         }
     }
 
+    // El DetectorFallos llama a este método cuando detecta que un nodo cayó
+    public void notificarNodoCaido(int idNodoCaido) {
+        registrarEvento("Notificación: Nodo " + idNodoCaido + " caído.");
+
+        if (idNodoCaido == idCoordinadorActual) {
+            registrarEvento("¡El coordinador (Nodo " + idNodoCaido + ") cayó! "
+                + "Iniciando elección Bully...");
+            bully.iniciarEleccion();
+        }
+    }
+
+    // El DetectorFallos llama a este método cuando un nodo se reintegra
+    public void notificarNodoReintegrado(int idNodoReintegrado) {
+        registrarEvento("Nodo " + idNodoReintegrado + " se reintegró. Enviando estado actual.");
+
+        // Solo el coordinador envía el estado al nodo que vuelve
+        if (idNodoReintegrado != idNodo && idCoordinadorActual == idNodo) {
+            enviarEstadoActualANodo(idNodoReintegrado);
+        }
+    }
+
+    // Expone el Bully al ReceptorMensajesNodo para procesar mensajes de elección
+    public AlgoritmoBully getBully() {
+        return bully;
+    }
+
+    // Permite actualizar el coordinador cuando llega un mensaje COORDINADOR
+    public void actualizarCoordinador(int nuevoIdCoordinador) {
+        this.idCoordinadorActual = nuevoIdCoordinador;
+        registrarEvento("Coordinador actualizado → Nodo " + nuevoIdCoordinador);
+    }
+
+    public int getIdCoordinadorActual() {
+        return idCoordinadorActual;
+    }
+
     // Función principal 1: buscar productos
     public List<Producto> buscar(String nombre) {
         registrarEvento("Solicitud de búsqueda recibida: " + nombre);
 
         List<Producto> resultado = new ArrayList<>();
 
-        if (nombre == null) {
+        if (nombre == null || nombre.trim().isEmpty()) {
             registrarEvento("Búsqueda cancelada: nombre nulo.");
             return resultado;
         }
@@ -113,7 +173,6 @@ public class Servidor {
         }
 
         registrarEvento("Búsqueda finalizada. Resultados encontrados: " + resultado.size());
-
         return resultado;
     }
 
@@ -133,7 +192,6 @@ public class Servidor {
                     // Varios clientes podrían intentar comprar el mismo producto al mismo tiempo.
                     if (p.stock <= 0) {
                         registrarEvento("Compra rechazada por falta de stock. Producto ID: " + id);
-
                         res.mensaje = "Compra rechazada: producto sin stock.";
                         return res;
                     }
@@ -146,21 +204,25 @@ public class Servidor {
                     // Si WebPay no responde, no se modifica el stock.
                     if (respuestaPago == null) {
                         registrarEvento("Compra cancelada. WebPay no respondió. Producto ID: " + id);
-
                         res.mensaje = "Compra cancelada: no se pudo conectar con WebPay.";
                         return res;
                     }
 
-                    // Si WebPay aprueba el pago, se descuenta stock.
+                    // Si WebPay aprueba el pago, se descuenta stock y se sincroniza.
                     if (respuestaPago.aprobado) {
                         p.stock--;
+
+                        // Estampar el Lamport de esta modificación en el producto
+                        int tiempoCompra = relojLamport.incrementar();
+                        p.ultimoLamport = tiempoCompra;
+
                         guardarProductos();
 
                         registrarEvento("Compra aprobada. Stock actualizado. Producto ID: " + id
-                                + ". Stock restante: " + p.stock);
+                                + ". Stock restante: " + p.stock
+                                + " [Lamport=" + tiempoCompra + "]");
 
-                        // Más adelante aquí enviaremos SYNC_STOCK a los otros nodos.
-                        // Por ahora dejamos el punto marcado para la siguiente etapa.
+                        difundirSyncStock(id, p.stock, tiempoCompra);
 
                         res.mensaje = "Compra exitosa. " + respuestaPago.mensaje;
                         res.nuevoSaldo = respuestaPago.saldoRestante;
@@ -168,7 +230,6 @@ public class Servidor {
 
                     } else {
                         registrarEvento("Compra rechazada por WebPay. Producto ID: " + id);
-
                         res.mensaje = "Compra rechazada. " + respuestaPago.mensaje;
                         return res;
                     }
@@ -177,12 +238,126 @@ public class Servidor {
         }
 
         registrarEvento("Compra rechazada. Producto no encontrado. Producto ID: " + id);
-
         res.mensaje = "Producto no encontrado.";
         return res;
     }
 
-    // Comunicación entre el nodo MercadoLibre y el servidor WebPay
+    // Difunde SYNC_STOCK a los otros nodos con el reloj Lamport estampado
+    private void difundirSyncStock(int idProducto, int nuevoStock, int tiempoLamport) {
+        List<NodoInfo> otros = Membresia.obtenerOtrosNodos(idNodo);
+
+        for (NodoInfo destino : otros) {
+            MensajeNodo msg = new MensajeNodo(
+                "SYNC_STOCK",
+                idNodo,
+                puertoNodos,
+                destino.getIdNodo(),
+                tiempoLamport,  // usamos el Lamport de la compra, no uno nuevo
+                idProducto + ":" + nuevoStock
+            );
+
+            boolean ok = comunicador.enviarMensaje(destino, msg);
+
+            if (ok) {
+                System.out.println("[Lamport=" + tiempoLamport + "][Nodo " + idNodo
+                    + "] SYNC_STOCK enviado a Nodo " + destino.getIdNodo()
+                    + " -> Producto " + idProducto + ", Stock: " + nuevoStock);
+            } else {
+                System.out.println("[Lamport=" + tiempoLamport + "][Nodo " + idNodo
+                    + "] SYNC_STOCK fallido hacia Nodo " + destino.getIdNodo()
+                    + " (nodo inactivo o caído)");
+            }
+        }
+    }
+
+    // Validar orden de Lamport antes de aplicar sincronización (Punto 3)
+    public void aplicarSincronizacionStock(int idProducto, int nuevoStock, int tiempoLamportRecibido) {
+        boolean encontrado = false;
+        boolean aplicado = false;
+
+        synchronized (productos) {
+            for (Producto p : productos) {
+                if (p.id == idProducto) {
+                    encontrado = true;
+
+                    if (tiempoLamportRecibido > p.ultimoLamport) {
+                        p.stock = nuevoStock;
+                        p.ultimoLamport = tiempoLamportRecibido;
+                        aplicado = true;
+                        registrarEvento("[Lamport] Sync aplicada. Producto ID: " + idProducto
+                                + " -> Stock: " + nuevoStock
+                                + " (Lamport recibido: " + tiempoLamportRecibido + ")");
+                    } else {
+                        registrarEvento("[Lamport] Sync ignorada por obsoleta. Producto ID: " + idProducto
+                                + " | Msg: " + tiempoLamportRecibido
+                                + " <= Local: " + p.ultimoLamport);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Guardar fuera del synchronized con snapshot (evita I/O bloqueante)
+        if (aplicado) {
+            guardarProductos();
+        }
+
+        if (!encontrado) {
+            registrarEvento("Alerta: SYNC_STOCK para Producto ID " + idProducto
+                    + " no encontrado en catálogo local.");
+        }
+    }
+
+    // Envía el estado completo del catálogo a un nodo que se reintegró (Punto 2)
+    public void enviarEstadoActualANodo(int idNodoDestino) {
+        NodoInfo destino = Membresia.buscarPorId(idNodoDestino);
+        if (destino == null || !destino.isActivo()) return;
+
+        List<Producto> snapshot;
+        synchronized (productos) {
+            snapshot = new ArrayList<>(productos);
+        }
+
+        registrarEvento("Enviando transferencia de estado completa al Nodo " + idNodoDestino);
+
+        for (Producto p : snapshot) {
+            MensajeNodo msg = new MensajeNodo(
+                "SYNC_STOCK",
+                idNodo,
+                puertoNodos,
+                idNodoDestino,
+                p.ultimoLamport,  // usamos el Lamport real de cada producto
+                p.id + ":" + p.stock
+            );
+            comunicador.enviarMensaje(destino, msg);
+        }
+
+        registrarEvento("Transferencia de estado completada para Nodo " + idNodoDestino);
+    }
+
+    // Al arrancar, si no soy el coordinador pido el estado actual (Punto 2)
+    public void solicitarTransferenciaEstado() {
+        // Si soy el coordinador inicial no pido nada
+        if (idCoordinadorActual == this.idNodo) return;
+
+        NodoInfo coord = Membresia.buscarPorId(idCoordinadorActual);
+        if (coord != null && coord.isActivo()) {
+            registrarEvento("Solicitando transferencia de estado al Coordinador (Nodo "
+                    + idCoordinadorActual + ")");
+
+            int tiempo = relojLamport.incrementar();
+            MensajeNodo msg = new MensajeNodo(
+                "SOLICITAR_ESTADO",
+                idNodo,
+                puertoNodos,
+                idCoordinadorActual,
+                tiempo,
+                "pull_state"
+            );
+            comunicador.enviarMensaje(coord, msg);
+        }
+    }
+
     private RespuestaPago procesarPagoWebPay(int monto, int saldoCliente) {
         try (
             Socket socket = new Socket("localhost", 6000);
@@ -195,7 +370,6 @@ public class Servidor {
             registrarEvento("Conexión establecida con WebPay. Monto: " + monto);
 
             PeticionPago peticionPago = new PeticionPago(monto, saldoCliente);
-
             out.writeObject(peticionPago);
             out.flush();
 
@@ -224,7 +398,6 @@ public class Servidor {
         }
     }
 
-    // Cargar productos desde archivo txt
     private void cargarProductos() {
         try (BufferedReader br = new BufferedReader(new FileReader("productos.txt"))) {
             String linea;
@@ -255,15 +428,19 @@ public class Servidor {
         }
     }
 
-    // Guardar productos actualizados en archivo txt
     private void guardarProductos() {
-        try (BufferedWriter bw = new BufferedWriter(new FileWriter("productos.txt"))) {
+        // 1. Snapshot bajo el candado (operación rápida, solo memoria)
+        List<Producto> snapshot;
+        synchronized (productos) {
+            snapshot = new ArrayList<>(productos);
+        }
 
-            for (Producto p : productos) {
+        // 2. Escribir al disco fuera del candado (operación lenta, no bloquea a nadie)
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter("productos.txt"))) {
+            for (Producto p : snapshot) {
                 bw.write(p.id + ";" + p.nombre + ";" + p.stock + ";" + p.precio);
                 bw.newLine();
             }
-
             registrarEvento("Archivo productos.txt actualizado correctamente.");
 
         } catch (IOException e) {
@@ -272,22 +449,10 @@ public class Servidor {
         }
     }
 
-    public int getIdNodo() {
-        return idNodo;
-    }
-
-    public int getPuertoClientes() {
-        return puertoClientes;
-    }
-
-    public int getPuertoNodos() {
-        return puertoNodos;
-    }
-
-    // Lo dejo también para no romper código antiguo que use getPuerto()
-    public int getPuerto() {
-        return puertoClientes;
-    }
+    public int getIdNodo() { return idNodo; }
+    public int getPuertoClientes() { return puertoClientes; }
+    public int getPuertoNodos() { return puertoNodos; }
+    public int getPuerto() { return puertoClientes; }
 
     public synchronized int avanzarRelojLamport() {
         return relojLamport.incrementar();
@@ -295,7 +460,6 @@ public class Servidor {
 
     public synchronized void registrarEvento(String descripcion) {
         int tiempo = relojLamport.incrementar();
-
         System.out.println(
                 "[Lamport=" + tiempo + "]"
                 + "[Nodo " + idNodo + "] "

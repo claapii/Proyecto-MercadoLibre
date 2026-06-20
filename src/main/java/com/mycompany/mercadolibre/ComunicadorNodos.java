@@ -16,16 +16,17 @@ public class ComunicadorNodos {
             salida.close();
             socket.close();
 
-            System.out.println("[COMUNICADOR] Mensaje enviado a Nodo "
-                    + nodoDestino.getIdNodo() + ": " + mensaje.getTipoMensaje());
+            //incluir el reloj de Lamport en el log de envío
+            System.out.println("[Lamport=" + mensaje.getRelojLamport() + "][COMUNICADOR] "
+                    + "Mensaje " + mensaje.getTipoMensaje()
+                    + " enviado a Nodo " + nodoDestino.getIdNodo());
 
             return true;
 
         } catch (Exception e) {
             System.out.println("[COMUNICADOR] No se pudo enviar mensaje al Nodo "
-                    + nodoDestino.getIdNodo());
+                    + nodoDestino.getIdNodo() + ": " + e.getMessage());
 
-            nodoDestino.setActivo(false);
             return false;
         }
     }
