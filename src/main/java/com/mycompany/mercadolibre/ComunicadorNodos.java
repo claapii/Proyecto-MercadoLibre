@@ -16,16 +16,29 @@ public class ComunicadorNodos {
             salida.close();
             socket.close();
 
-            //incluir el reloj de Lamport en el log de envío
-            System.out.println("[Lamport=" + mensaje.getRelojLamport() + "][COMUNICADOR] "
+            String linea = "[Lamport=" + mensaje.getRelojLamport() + "]"
+                    + "[Nodo " + mensaje.getIdOrigen() + "] "
                     + "Mensaje " + mensaje.getTipoMensaje()
-                    + " enviado a Nodo " + nodoDestino.getIdNodo());
+                    + " enviado a Nodo " + nodoDestino.getIdNodo()
+                    + " | Contenido: " + mensaje.getContenido();
+
+            System.out.println(linea);
+
+            // Guarda en el log del nodo que envía el mensaje.
+            LoggerSistema.logNodo(mensaje.getIdOrigen(), linea);
 
             return true;
 
         } catch (Exception e) {
-            System.out.println("[COMUNICADOR] No se pudo enviar mensaje al Nodo "
-                    + nodoDestino.getIdNodo() + ": " + e.getMessage());
+            String linea = "[Nodo " + mensaje.getIdOrigen() + "] "
+                    + "No se pudo enviar mensaje " + mensaje.getTipoMensaje()
+                    + " al Nodo " + nodoDestino.getIdNodo()
+                    + ": " + e.getMessage();
+
+            System.out.println("[COMUNICADOR] " + linea);
+
+            // También guardamos los fallos de envío, porque sirven como evidencia de omisión/fallo.
+            LoggerSistema.logNodo(mensaje.getIdOrigen(), "[COMUNICADOR] " + linea);
 
             return false;
         }

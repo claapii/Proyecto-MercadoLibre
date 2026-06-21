@@ -460,10 +460,14 @@ public class Servidor {
 
     public synchronized void registrarEvento(String descripcion) {
         int tiempo = relojLamport.incrementar();
-        System.out.println(
-                "[Lamport=" + tiempo + "]"
-                + "[Nodo " + idNodo + "] "
-                + descripcion
-        );
+        
+        String linea = "[Lamport=" + tiempo + "]"
+                + "[Nodo " + idNodo + "]"
+                + descripcion;
+        
+        System.out.println(linea);
+        
+        //Esto es para guardar el mismo evento en archivo para después adjuntarlo en la entrega
+        LoggerSistema.logNodo(idNodo, linea);
     }
 }

@@ -46,69 +46,131 @@ public class ReceptorMensajesNodo extends Thread {
 
         } catch (Exception e) {
             System.out.println("[Nodo " + idNodo + "] Error en receptor de mensajes: " + e.getMessage());
+            LoggerSistema.logNodo(idNodo,
+                    "[Nodo " + idNodo + "] Error en receptor de mensajes: " + e.getMessage());
         }
     }
 
     private void procesarMensaje(MensajeNodo mensaje) {
         int tiempoActualizado = relojLamport.actualizar(mensaje.getRelojLamport());
 
-        System.out.println("------------------------------------");
-        System.out.println("[Lamport=" + tiempoActualizado + "][Nodo " + idNodo + "] Mensaje recibido");
-        System.out.println("Tipo: " + mensaje.getTipoMensaje());
-        System.out.println("Origen: Nodo " + mensaje.getIdOrigen());
-        System.out.println("Destino: Nodo " + mensaje.getIdDestino());
-        System.out.println("Reloj Lamport del emisor: " + mensaje.getRelojLamport());
-        System.out.println("Reloj Lamport local tras actualizar: " + tiempoActualizado);
-        System.out.println("Contenido: " + mensaje.getContenido());
-        System.out.println("------------------------------------");
+        String lineaRecepcion = "[Lamport=" + tiempoActualizado + "]"
+                + "[Nodo " + idNodo + "] "
+                + "Mensaje recibido | Tipo: " + mensaje.getTipoMensaje()
+                + " | Origen: Nodo " + mensaje.getIdOrigen()
+                + " | Destino: Nodo " + mensaje.getIdDestino()
+                + " | Lamport emisor: " + mensaje.getRelojLamport()
+                + " | Lamport local actualizado: " + tiempoActualizado
+                + " | Contenido: " + mensaje.getContenido();
+
+        System.out.println(lineaRecepcion);
+        LoggerSistema.logNodo(idNodo, lineaRecepcion);
 
         switch (mensaje.getTipoMensaje()) {
 
-            case "HEARTBEAT":
+            case "HEARTBEAT": {
                 detectorFallos.registrarHeartbeat(mensaje.getIdOrigen());
-                System.out.println("[Lamport=" + tiempoActualizado + "][Nodo " + idNodo
-                    + "] Heartbeat de Nodo " + mensaje.getIdOrigen() + " registrado.");
-                break;
 
-            case "ELECCION":
+                String linea = "[Lamport=" + tiempoActualizado + "]"
+                        + "[Nodo " + idNodo + "] "
+                        + "Heartbeat registrado desde Nodo " + mensaje.getIdOrigen();
+
+                System.out.println(linea);
+                LoggerSistema.logNodo(idNodo, linea);
+                break;
+            }
+
+            case "ELECCION": {
+                String linea = "[Lamport=" + tiempoActualizado + "]"
+                        + "[Nodo " + idNodo + "] "
+                        + "Mensaje ELECCION recibido desde Nodo " + mensaje.getIdOrigen();
+
+                System.out.println(linea);
+                LoggerSistema.logNodo(idNodo, linea);
+
                 servidor.getBully().recibirEleccion(mensaje.getIdOrigen());
                 break;
+            }
 
-            case "OK":
+            case "OK": {
+                String linea = "[Lamport=" + tiempoActualizado + "]"
+                        + "[Nodo " + idNodo + "] "
+                        + "Mensaje OK recibido desde Nodo " + mensaje.getIdOrigen();
+
+                System.out.println(linea);
+                LoggerSistema.logNodo(idNodo, linea);
+
                 servidor.getBully().recibirOK(mensaje.getIdOrigen());
                 break;
+            }
 
-            case "COORDINADOR":
+            case "COORDINADOR": {
+                String linea = "[Lamport=" + tiempoActualizado + "]"
+                        + "[Nodo " + idNodo + "] "
+                        + "Mensaje COORDINADOR recibido. Nuevo coordinador propuesto: Nodo "
+                        + mensaje.getIdOrigen();
+
+                System.out.println(linea);
+                LoggerSistema.logNodo(idNodo, linea);
+
                 servidor.getBully().recibirCoordinador(mensaje.getIdOrigen());
                 break;
+            }
 
-            case "SYNC_STOCK":
+            case "SYNC_STOCK": {
                 try {
                     String[] partes = mensaje.getContenido().split(":");
                     int idProducto = Integer.parseInt(partes[0]);
-                    int nuevoStock  = Integer.parseInt(partes[1]);
+                    int nuevoStock = Integer.parseInt(partes[1]);
 
-                    // Pasamos el Lamport del mensaje para validar orden causal
-                    servidor.aplicarSincronizacionStock(idProducto, nuevoStock,
-                            mensaje.getRelojLamport());
+                    String linea = "[Lamport=" + tiempoActualizado + "]"
+                            + "[Nodo " + idNodo + "] "
+                            + "SYNC_STOCK recibido desde Nodo " + mensaje.getIdOrigen()
+                            + " | Producto ID: " + idProducto
+                            + " | Nuevo stock: " + nuevoStock
+                            + " | Lamport actualización: " + mensaje.getRelojLamport();
+
+                    System.out.println(linea);
+                    LoggerSistema.logNodo(idNodo, linea);
+
+                    servidor.aplicarSincronizacionStock(
+                            idProducto,
+                            nuevoStock,
+                            mensaje.getRelojLamport()
+                    );
 
                 } catch (Exception e) {
-                    System.out.println("[Nodo " + idNodo + "] Error parseando SYNC_STOCK: "
-                            + e.getMessage());
+                    String linea = "[Nodo " + idNodo + "] "
+                            + "Error parseando SYNC_STOCK: " + e.getMessage();
+
+                    System.out.println(linea);
+                    LoggerSistema.logNodo(idNodo, linea);
                 }
                 break;
+            }
 
-            case "SOLICITAR_ESTADO":
-                // Un nodo se reintegró y pide el catálogo actualizado
-                System.out.println("[Lamport=" + tiempoActualizado + "][Nodo " + idNodo
-                        + "] Nodo " + mensaje.getIdOrigen()
-                        + " solicitó transferencia de estado.");
+            case "SOLICITAR_ESTADO": {
+                String linea = "[Lamport=" + tiempoActualizado + "]"
+                        + "[Nodo " + idNodo + "] "
+                        + "Nodo " + mensaje.getIdOrigen()
+                        + " solicitó transferencia de estado.";
+
+                System.out.println(linea);
+                LoggerSistema.logNodo(idNodo, linea);
+
                 servidor.enviarEstadoActualANodo(mensaje.getIdOrigen());
                 break;
+            }
 
-            default:
-                System.out.println("[Lamport=" + tiempoActualizado + "][Nodo " + idNodo
-                    + "] Tipo de mensaje no reconocido: " + mensaje.getTipoMensaje());
+            default: {
+                String linea = "[Lamport=" + tiempoActualizado + "]"
+                        + "[Nodo " + idNodo + "] "
+                        + "Tipo de mensaje no reconocido: " + mensaje.getTipoMensaje();
+
+                System.out.println(linea);
+                LoggerSistema.logNodo(idNodo, linea);
+                break;
+            }
         }
     }
 
